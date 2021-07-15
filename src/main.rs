@@ -17,8 +17,10 @@ mod app {
     use st7789::{Orientation, ST7789};
     use stm32f4xx_hal::delay::Delay;
     use stm32f4xx_hal::fsmc_lcd::{ChipSelect3, FsmcLcd, Lcd, LcdPins, SubBank3, Timing};
+    use stm32f4xx_hal::gpio::gpioa::PA0;
     use stm32f4xx_hal::gpio::gpiob::{PB10, PB11, PB13};
-    use stm32f4xx_hal::gpio::{AlternateOD, Output, PushPull, Speed};
+    use stm32f4xx_hal::gpio::gpioe::PE5;
+    use stm32f4xx_hal::gpio::{AlternateOD, Edge, Input, Output, PullDown, PushPull, Speed};
     use stm32f4xx_hal::hal::spi::MODE_0;
     use stm32f4xx_hal::i2c::I2c;
     use stm32f4xx_hal::pac::{I2C2, TIM2};
@@ -31,7 +33,9 @@ mod app {
     #[shared]
     struct Shared {
         lcd: ST7789<Lcd<SubBank3>, PB13<Output<PushPull>>>,
+        lcd_backlight: PE5<Output<PushPull>>,
         scd30: Scd30<I2c<I2C2, (PB10<AlternateOD<4>>, PB11<AlternateOD<4>>)>>,
+        button: PA0<Input<PullDown>>,
         timer: CountDownTimer<TIM2>,
         measurement: Option<(f32, f32, f32)>,
     }
@@ -40,7 +44,10 @@ mod app {
     struct Local {}
 
     #[init]
-    fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+        let mut syscfg = ctx.device.SYSCFG.constrain();
+
+        let gpioa = ctx.device.GPIOA.split();
         let gpiob = ctx.device.GPIOB.split();
         let gpiod = ctx.device.GPIOD.split();
         let gpioe = ctx.device.GPIOE.split();
@@ -49,6 +56,11 @@ mod app {
 
         let rcc = ctx.device.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(100.mhz()).freeze();
+
+        let mut button = gpioa.pa0.into_pull_down_input();
+        button.make_interrupt_source(&mut syscfg);
+        button.enable_interrupt(&mut ctx.device.EXTI);
+        button.trigger_on_edge(&mut ctx.device.EXTI, Edge::RISING);
 
         let lcd_pins = LcdPins {
             data: (
@@ -79,8 +91,8 @@ mod app {
             .into_push_pull_output()
             .set_speed(Speed::VeryHigh);
         let mut _lcd_tearing = gpiob.pb14.into_floating_input();
-        // Enable LCD backlight
-        gpioe.pe5.into_push_pull_output().set_high();
+        let mut lcd_backlight = gpioe.pe5.into_push_pull_output();
+        lcd_backlight.set_high();
 
         let mut delay = Delay::new(ctx.core.SYST, &clocks);
         let lcd_write_timing = Timing::default().data(3).address_setup(3).bus_turnaround(0);
@@ -133,13 +145,21 @@ mod app {
         (
             Shared {
                 lcd,
+                lcd_backlight,
                 scd30,
+                button,
                 timer,
                 measurement: None,
             },
             Local {},
             init::Monotonics(),
         )
+    }
+
+    #[task(binds = EXTI0, shared = [button, lcd_backlight])]
+    fn toggle_lcd(mut ctx: toggle_lcd::Context) {
+        ctx.shared.button.lock(PA0::clear_interrupt_pending_bit);
+        ctx.shared.lcd_backlight.lock(PE5::toggle);
     }
 
     #[task(binds = TIM2, shared = [lcd, scd30, timer, measurement])]
