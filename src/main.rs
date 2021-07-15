@@ -27,6 +27,7 @@ mod app {
     use stm32f4xx_hal::prelude::*;
     use stm32f4xx_hal::spi::Spi;
     use stm32f4xx_hal::timer::{CountDownTimer, Event, Timer};
+    use stm32f4xx_hal::watchdog::IndependentWatchdog;
 
     use crate::scd30::Scd30;
 
@@ -37,6 +38,7 @@ mod app {
         scd30: Scd30<I2c<I2C2, (PB10<AlternateOD<4>>, PB11<AlternateOD<4>>)>>,
         button: PA0<Input<PullDown>>,
         timer: CountDownTimer<TIM2>,
+        watchdog: IndependentWatchdog,
         measurement: Option<(f32, f32, f32)>,
     }
 
@@ -142,6 +144,10 @@ mod app {
             clocks,
         );
 
+        let mut watchdog = IndependentWatchdog::new(ctx.device.IWDG);
+        watchdog.stop_on_debug(&ctx.device.DBGMCU, true);
+        watchdog.start(1000.ms());
+
         (
             Shared {
                 lcd,
@@ -149,6 +155,7 @@ mod app {
                 scd30,
                 button,
                 timer,
+                watchdog,
                 measurement: None,
             },
             Local {},
@@ -162,11 +169,12 @@ mod app {
         ctx.shared.lcd_backlight.lock(PE5::toggle);
     }
 
-    #[task(binds = TIM2, shared = [lcd, scd30, timer, measurement])]
+    #[task(binds = TIM2, shared = [lcd, scd30, timer, measurement, watchdog])]
     fn measure(mut ctx: measure::Context) {
         ctx.shared
             .timer
             .lock(|timer| timer.clear_interrupt(Event::TimeOut));
+        ctx.shared.watchdog.lock(IndependentWatchdog::feed);
 
         let measurement = ctx.shared.scd30.lock(|scd30| {
             scd30
