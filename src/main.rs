@@ -7,6 +7,7 @@
 
 use arrayvec::ArrayString;
 use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, Ordering};
 use defmt_rtt as _;
 use embassy::executor::Spawner;
 use embassy::time::{Delay, Duration, Ticker, Timer};
@@ -51,6 +52,8 @@ mod ism43362;
 mod network;
 mod scd30;
 
+static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(true);
+
 #[embassy::task]
 async fn button_task(mut button: ExtiInput<'static, PA0>, mut lcd_backlight: Output<'static, PE5>) {
     for powered in core::iter::successors(Some(false), |powered| Some(!*powered)) {
@@ -60,6 +63,7 @@ async fn button_task(mut button: ExtiInput<'static, PA0>, mut lcd_backlight: Out
         } else {
             defmt::unwrap!(lcd_backlight.set_low());
         }
+        DISPLAY_ENABLED.store(powered, Ordering::SeqCst);
     }
 }
 
@@ -212,6 +216,10 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
     let mut ticker = Ticker::every(Duration::from_secs(1));
 
     while let Some(()) = ticker.next().await {
+        if !DISPLAY_ENABLED.load(Ordering::SeqCst) {
+            continue;
+        }
+
         let measurement = with_readouts(|readouts| *readouts);
         let mut str = ArrayString::<256>::new();
 
