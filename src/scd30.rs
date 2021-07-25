@@ -1,30 +1,30 @@
 use arrayvec::ArrayVec;
 use crc_any::CRCu8;
-use stm32f4xx_hal::hal::blocking::i2c::{Read, Write};
+use embassy_stm32::i2c::{Error as I2cError, I2c, Instance};
+use embedded_hal::blocking::i2c::{Read, Write};
 
 const ADDRESS: u8 = 0x61;
 
-#[derive(Debug)]
-pub enum Error<E> {
-    I2c(E),
+#[derive(defmt::Format)]
+pub enum Error {
+    I2c(I2cError),
     Crc8,
 }
 
-impl<E> From<E> for Error<E> {
-    fn from(err: E) -> Self {
+impl From<I2cError> for Error {
+    fn from(err: I2cError) -> Self {
         Self::I2c(err)
     }
 }
 
-pub struct Scd30<I2C> {
-    i2c: I2C,
+/// SCD30 CO2 sensor
+pub struct Scd30 {
     crc8: CRCu8,
 }
 
-impl<E, I2C: Read<Error = E> + Write<Error = E>> Scd30<I2C> {
-    pub fn new(i2c: I2C) -> Self {
+impl Scd30 {
+    pub fn new() -> Self {
         Self {
-            i2c,
             crc8: CRCu8::create_crc(0x31, 8, 0xFF, 0x00, false),
         }
     }
@@ -35,19 +35,24 @@ impl<E, I2C: Read<Error = E> + Write<Error = E>> Scd30<I2C> {
         self.crc8.reset();
         crc
     }
-    pub fn measure_continuously(&mut self, pressure: u16) -> Result<(), Error<E>> {
+
+    pub fn measure_continuously<I2C: Instance>(
+        &mut self,
+        i2c: &mut I2c<I2C>,
+        pressure: u16,
+    ) -> Result<(), Error> {
         let mut command = ArrayVec::<u8, 5>::new();
         command.extend(0x0010u16.to_be_bytes());
         command.extend(pressure.to_be_bytes());
         command.push(self.crc8(&pressure.to_be_bytes()));
-        self.i2c.write(ADDRESS, &command)?;
+        i2c.write(ADDRESS, &command)?;
         Ok(())
     }
 
-    pub fn is_data_ready(&mut self) -> Result<bool, Error<E>> {
+    pub fn is_data_ready<I2C: Instance>(&mut self, i2c: &mut I2c<I2C>) -> Result<bool, Error> {
         let mut buffer = [0; 3];
-        self.i2c.write(ADDRESS, &0x0202u16.to_be_bytes())?;
-        self.i2c.read(ADDRESS, &mut buffer)?;
+        i2c.write(ADDRESS, &0x0202u16.to_be_bytes())?;
+        i2c.read(ADDRESS, &mut buffer)?;
 
         if self.crc8(&buffer[..2]) != buffer[2] {
             return Err(Error::Crc8);
@@ -56,10 +61,13 @@ impl<E, I2C: Read<Error = E> + Write<Error = E>> Scd30<I2C> {
         Ok(u16::from_be_bytes([buffer[0], buffer[1]]) == 1)
     }
 
-    pub fn read_measurement(&mut self) -> Result<(f32, f32, f32), Error<E>> {
+    pub fn read_measurement<I2C: Instance>(
+        &mut self,
+        i2c: &mut I2c<I2C>,
+    ) -> Result<(f32, f32, f32), Error> {
         let mut buffer = [0; 18];
-        self.i2c.write(ADDRESS, &0x0300u16.to_be_bytes())?;
-        self.i2c.read(ADDRESS, &mut buffer)?;
+        i2c.write(ADDRESS, &0x0300u16.to_be_bytes())?;
+        i2c.read(ADDRESS, &mut buffer)?;
 
         for chunk in buffer.chunks(3) {
             if self.crc8(&chunk[0..2]) != chunk[2] {
