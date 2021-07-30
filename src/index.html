@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>airqc</title>
+    <style>
+        .canvas-wrapper {
+            height: 400px;
+            width: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="canvas-wrapper"><canvas id="scd30-co2" width="400" height="400"></canvas></div>
+    <div class="canvas-wrapper"><canvas id="scd30-temperature" width="400" height="400"></canvas></div>
+    <div class="canvas-wrapper"><canvas id="scd30-humidity" width="400" height="400"></canvas></div>
+
+    <div class="canvas-wrapper"><canvas id="hp206c-pressure" width="400" height="400"></canvas></div>
+    <div class="canvas-wrapper"><canvas id="hp206c-temperature" width="400" height="400"></canvas></div>
+
+    <div class="canvas-wrapper"><canvas id="mix8410-voltage" width="400" height="400"></canvas></div>
+    <div class="canvas-wrapper"><canvas id="mix8410-concentration" width="400" height="400"></canvas></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
+
+    <script>
+        let scd30_co2 = new Chart('scd30-co2', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'SCD30: CO2 concentration',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 400,
+                        suggestedMax: 1000,
+                        ticks: {
+                            callback: (value, index, values) => value + ' ppm',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let scd30_temperature = new Chart('scd30-temperature', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'SCD30: temperature',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 0,
+                        suggestedMax: 50,
+                        ticks: {
+                            callback: (value, index, values) => value + ' °C',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let scd30_humidity = new Chart('scd30-humidity', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'SCD30: relative humidity',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 30,
+                        suggestedMax: 60,
+                        ticks: {
+                            callback: (value, index, values) => value + ' %',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let hp206c_pressure = new Chart('hp206c-pressure', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'HP206C: atmospheric pressure',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 870,
+                        suggestedMax: 1081.8,
+                        ticks: {
+                            callback: (value, index, values) => value + ' hPa',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let hp206c_temperature = new Chart('hp206c-temperature', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'HP206C: temperature',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 0,
+                        suggestedMax: 50,
+                        ticks: {
+                            callback: (value, index, values) => value + ' °C',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let mix8410_voltage = new Chart('mix8410-voltage', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'MIX8410-O2: voltage',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 0,
+                        suggestedMax: 3.3,
+                        ticks: {
+                            callback: (value, index, values) => value + ' V',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let mix8410_concentration = new Chart('mix8410-concentration', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'MIX8410-O2: O2 concentration',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 0,
+                        suggestedMax: 25,
+                        ticks: {
+                            callback: (value, index, values) => value + ' %',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+
+        window.setInterval(() => {
+            fetch("/measurements")
+                .then(response => response.json())
+                .then(data => {
+                    let now = new Date();
+
+                    scd30_co2.data.labels.push(now);
+                    scd30_co2.data.datasets[0].data.push(data.scd30.co2);
+                    scd30_co2.update();
+
+                    scd30_temperature.data.labels.push(now);
+                    scd30_temperature.data.datasets[0].data.push(data.scd30.temperature);
+                    scd30_temperature.update();
+
+                    scd30_humidity.data.labels.push(now);
+                    scd30_humidity.data.datasets[0].data.push(data.scd30.humidity);
+                    scd30_humidity.update();
+
+                    hp206c_pressure.data.labels.push(now);
+                    hp206c_pressure.data.datasets[0].data.push(data.hp206c.pressure / 100);
+                    hp206c_pressure.update();
+
+                    hp206c_temperature.data.labels.push(now);
+                    hp206c_temperature.data.datasets[0].data.push(data.hp206c.temperature / 100);
+                    hp206c_temperature.update();
+
+                    mix8410_voltage.data.labels.push(now);
+                    mix8410_voltage.data.datasets[0].data.push(data.mix8410.voltage / 1000);
+                    mix8410_voltage.update();
+
+                    mix8410_concentration.data.labels.push(now);
+                    mix8410_concentration.data.datasets[0].data.push(data.mix8410.concentration);
+                    mix8410_concentration.update();
+                });
+        }, 4000);
+    </script>
+</body>
+
+</html>

@@ -327,8 +327,8 @@ async fn handle_connection(
     let mut body = ArrayVec::<u8, 2048>::new();
     let (headers, body) = match route {
         Route::GetIndex => (
-            &b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n"[..],
-            &b"TODO"[..],
+            &b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n"[..],
+            &include_bytes!("index.html")[..],
         ),
         Route::GetMeasurements => {
             while let Ok(()) = body.try_push(0) {}
@@ -381,9 +381,11 @@ async fn handle_connection(
     let res = parse_response(&res)??;
     defmt::info!("S3 response [headers]: {}", Debug2Format(res.as_bstr()));
 
-    let res = wifi.send_s3_command(body).await?;
-    let res = parse_response(&res)??;
-    defmt::info!("S3 response [body]: {}", Debug2Format(res.as_bstr()));
+    for chunk in body.chunks(1024) {
+        let res = wifi.send_s3_command(chunk).await?;
+        let res = parse_response(&res)??;
+        defmt::info!("S3 response [body]: {}", Debug2Format(res.as_bstr()));
+    }
 
     Ok(())
 }
