@@ -52,18 +52,20 @@ mod ism43362;
 mod network;
 mod scd30;
 
-static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(true);
+static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[embassy::task]
 async fn button_task(mut button: ExtiInput<'static, PA0>, mut lcd_backlight: Output<'static, PE5>) {
-    for powered in core::iter::successors(Some(false), |powered| Some(!*powered)) {
+    loop {
         button.wait_for_falling_edge().await;
+        // `DISPLAY_ENABLED ^ true` is the same as `!DISPLAY_ENABLED`
+        // `fetch_xor` returns the old value so invert that as well.
+        let powered = !DISPLAY_ENABLED.fetch_xor(true, Ordering::SeqCst);
         if powered {
             defmt::unwrap!(lcd_backlight.set_high());
         } else {
             defmt::unwrap!(lcd_backlight.set_low());
         }
-        DISPLAY_ENABLED.store(powered, Ordering::SeqCst);
     }
 }
 
@@ -320,7 +322,15 @@ async fn main(spawner: Spawner, device: Peripherals) {
     hal.RCC.apb2enr.modify(|_, w| w.syscfgen().enabled());
 
     let button = ExtiInput::new(Input::new(device.PA0, Pull::Down), device.EXTI0);
-    let lcd_backlight = Output::new(device.PE5, Level::High, Speed::Low);
+    let lcd_backlight = Output::new(
+        device.PE5,
+        if DISPLAY_ENABLED.load(Ordering::SeqCst) {
+            Level::High
+        } else {
+            Level::Low
+        },
+        Speed::Low,
+    );
 
     let i2c2 = I2c::new(device.I2C2, device.PB10, device.PB11, 100u32.khz());
 
