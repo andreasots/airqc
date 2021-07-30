@@ -24,6 +24,7 @@ pub enum NetworkError {
     CommandError,
     Json,
     Fmt,
+    Disconnected,
 }
 
 #[derive(defmt::Format)]
@@ -128,6 +129,10 @@ async fn network_task_inner(
         Debug2Format(version.as_bstr())
     );
 
+    let res = wifi.send_command(b"CD").await?;
+    let res = parse_response(&res)??;
+    defmt::debug!("CD response: {}", Debug2Format(res.as_bstr()));
+
     let (ssid, ip) = 'connect: loop {
         let networks = wifi.send_command(b"F0").await?;
         let networks = parse_response(&networks)??;
@@ -185,11 +190,11 @@ async fn network_task_inner(
     );
 
     // Set socket
-    let res = &wifi.send_command(b"P0=0").await?;
+    let res = wifi.send_command(b"P0=0").await?;
     let res = parse_response(&res)??;
     defmt::info!("P0 response: {}", Debug2Format(res.as_bstr()));
     // Select TCP
-    let res = &wifi.send_command(b"P1=0").await?;
+    let res = wifi.send_command(b"P1=0").await?;
     let res = parse_response(&res)??;
     defmt::info!("P1 response: {}", Debug2Format(res.as_bstr()));
     // Set port to 80
@@ -209,9 +214,12 @@ async fn network_task_inner(
         let res = wifi.send_command(b"MR").await?;
         let res = parse_response(&res)??;
         let res = parse_async_message(res)?;
-        if res.starts_with(b"[TCP SVR] Accepted ") {
-            defmt::info!("MR response: {}", Debug2Format(res.as_bstr()));
 
+        if !res.is_empty() {
+            defmt::info!("MR response: {}", Debug2Format(res.as_bstr()));
+        }
+
+        if res.starts_with(b"[TCP SVR] Accepted ") {
             if let Err(err) = handle_connection(wifi).await {
                 defmt::error!("Connection handler failed: {}", err);
             }
@@ -221,6 +229,12 @@ async fn network_task_inner(
             let res = parse_response(&res)??;
             defmt::info!("P5 response: {}", Debug2Format(res.as_bstr()));
         } else {
+            let res = wifi.send_command(b"CS").await?;
+            let res = parse_response(&res)??;
+            if res == b"0" {
+                return Err(NetworkError::Disconnected);
+            }
+
             Timer::after(Duration::from_millis(500)).await;
         }
     }
