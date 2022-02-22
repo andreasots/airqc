@@ -1,23 +1,20 @@
 #![no_main]
 #![no_std]
-#![allow(incomplete_features)]
-#![feature(impl_trait_in_bindings)]
-#![feature(min_type_alias_impl_trait)]
 #![feature(type_alias_impl_trait)]
 
 use arrayvec::ArrayString;
+use embassy_stm32::adc::{Adc, Resolution, SampleTime};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 use defmt_rtt as _;
 use embassy::executor::Spawner;
 use embassy::time::{Delay, Duration, Ticker, Timer};
-use embassy::traits::gpio::WaitForFallingEdge;
 use embassy_stm32::dma::NoDma;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{Error as I2cError, I2c};
-use embassy_stm32::peripherals::{I2C2, PA0, PE5};
-use embassy_stm32::spi::{ByteOrder, Config, Spi, MODE_0};
+use embassy_stm32::peripherals::{I2C2, PA0, PE5, PC0, ADC1};
+use embassy_stm32::spi::{BitOrder, Config, Spi, MODE_0};
 use embassy_stm32::time::U32Ext;
 use embassy_stm32::Peripherals;
 use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
@@ -26,22 +23,11 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::Text;
-use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::watchdog::{Watchdog, WatchdogEnable};
 use futures::StreamExt;
 use panic_probe as _;
 use scd30::Scd30;
 use serde::Serialize;
 use st7789::{Orientation, ST7789};
-use stm32f4xx_hal::adc::config::{AdcConfig, SampleTime};
-use stm32f4xx_hal::adc::Adc;
-use stm32f4xx_hal::fsmc_lcd::{ChipSelect3, FsmcLcd, Lcd, LcdPins, SubBank3, Timing};
-use stm32f4xx_hal::gpio::gpiob::PB13;
-use stm32f4xx_hal::gpio::gpioc::PC0;
-use stm32f4xx_hal::gpio::{Analog, GpioExt, PushPull};
-use stm32f4xx_hal::pac::ADC1;
-use stm32f4xx_hal::time::MilliSeconds;
-use stm32f4xx_hal::watchdog::IndependentWatchdog;
 
 use crate::hp206c::Hp206c;
 use crate::ism43362::Ism43362;
@@ -62,9 +48,9 @@ async fn button_task(mut button: ExtiInput<'static, PA0>, mut lcd_backlight: Out
         // `fetch_xor` returns the old value so invert that as well.
         let powered = !DISPLAY_ENABLED.fetch_xor(true, Ordering::SeqCst);
         if powered {
-            defmt::unwrap!(lcd_backlight.set_high());
+            lcd_backlight.set_high();
         } else {
-            defmt::unwrap!(lcd_backlight.set_low());
+            lcd_backlight.set_low();
         }
     }
 }
@@ -140,9 +126,8 @@ fn retry_crc_errors<T>(
 #[embassy::task]
 async fn measurement_task(
     mut i2c2: I2c<'static, I2C2>,
-    mut adc1: Adc<ADC1>,
-    oxygen_sensor: PC0<Analog>,
-    mut watchdog: IndependentWatchdog,
+    mut adc1: Adc<'static, ADC1>,
+    mut oxygen_sensor: PC0,
 ) {
     // Calibration measurement: 2633 mV
     //  * at a temperature of 18.69 °C
@@ -162,10 +147,8 @@ async fn measurement_task(
 
     let mut ticker = Ticker::every(Duration::from_secs(1)).enumerate();
     while let Some((i, ())) = ticker.next().await {
-        watchdog.feed();
-
-        let o2_sample = adc1.convert(&oxygen_sensor, SampleTime::Cycles_480);
-        let o2_sample_mv = adc1.sample_to_millivolts(o2_sample);
+        let o2_sample = adc1.read(&mut oxygen_sensor);
+        let o2_sample_mv = adc1.to_millivolts(o2_sample);
         let o2_concentration = o2_sample_mv as f32 * O2_VOLTAGE_TO_CONCENTRATION;
 
         let (pressure, temperature) = loop {
@@ -287,11 +270,8 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
 async fn main(spawner: Spawner, device: Peripherals) {
     defmt::info!("System started");
 
-    // NOTE: it's probably unwise to have two PAC crates...
-    let hal = defmt::unwrap!(stm32f4xx_hal::pac::Peripherals::take());
-
     // Enable system clocks in low power mode
-    hal.DBGMCU.cr.modify(|_, w| {
+    /*hal.DBGMCU.cr.modify(|_, w| {
         w.dbg_sleep().set_bit();
         w.dbg_standby().set_bit();
         w.dbg_stop().set_bit()
@@ -320,6 +300,7 @@ async fn main(spawner: Spawner, device: Peripherals) {
 
     // Enable the system configuration controller clock
     hal.RCC.apb2enr.modify(|_, w| w.syscfgen().enabled());
+    */
 
     let button = ExtiInput::new(Input::new(device.PA0, Pull::Down), device.EXTI0);
     let lcd_backlight = Output::new(
@@ -334,8 +315,10 @@ async fn main(spawner: Spawner, device: Peripherals) {
 
     let i2c2 = I2c::new(device.I2C2, device.PB10, device.PB11, 100u32.khz());
 
-    let adc1 = Adc::adc1(hal.ADC1, true, AdcConfig::default());
-    let oxygen_sensor = gpioc.pc0.into_analog();
+    let adc1 = Adc::new(device.ADC1, &mut Delay);
+    adc1.set_sample_time(SampleTime::Cycles480);
+    adc1.set_resolution(Resolution::TwelveBit);
+    let oxygen_sensor = device.PC0;
 
     let (lcd_pins, lcd_reset) = {
         let lcd_pins = LcdPins {
@@ -387,7 +370,7 @@ async fn main(spawner: Spawner, device: Peripherals) {
     // RST = PH1, WKUP = PB15, DATARDY = PG12
     let mut spi3_config = Config::default();
     spi3_config.mode = MODE_0;
-    spi3_config.byte_order = ByteOrder::MsbFirst;
+    spi3_config.bit_order = BitOrder::MsbFirst;
     let wifi = Ism43362::new(
         Spi::new(
             device.SPI3,
@@ -407,13 +390,8 @@ async fn main(spawner: Spawner, device: Peripherals) {
         device.PG11,
     );
 
-    // TODO: watchdog
-    let mut watchdog = IndependentWatchdog::new(hal.IWDG);
-    watchdog.stop_on_debug(&hal.DBGMCU, true);
-    watchdog.start(MilliSeconds(2000));
-
     defmt::unwrap!(spawner.spawn(button_task(button, lcd_backlight)));
-    defmt::unwrap!(spawner.spawn(measurement_task(i2c2, adc1, oxygen_sensor, watchdog)));
+    defmt::unwrap!(spawner.spawn(measurement_task(i2c2, adc1, oxygen_sensor)));
     defmt::unwrap!(spawner.spawn(display_task(lcd)));
     defmt::unwrap!(spawner.spawn(crate::network::network_task(wifi)));
 }

@@ -1,32 +1,15 @@
-use core::convert::Infallible;
 use core::fmt::Write;
 
 use arrayvec::{ArrayString, ArrayVec};
 use bstr::ByteSlice;
 use defmt::Debug2Format;
 use embassy::time::{Duration, Timer};
-use embassy::traits::gpio::WaitForRisingEdge;
 use embassy::util::Unborrow;
 use embassy_stm32::dma::NoDma;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pin, Pull, Speed};
 use embassy_stm32::spi::{Error, Instance, Spi};
-use embedded_hal::blocking::spi::Transfer;
-use embedded_hal::digital::v2::{InputPin, OutputPin, StatefulOutputPin};
 use itertools::Itertools;
-
-trait UnwrapInfallible<T> {
-    fn unwrap_infallible(self) -> T;
-}
-
-impl<T> UnwrapInfallible<T> for Result<T, Infallible> {
-    fn unwrap_infallible(self) -> T {
-        match self {
-            Ok(val) => val,
-            Err(infallible) => match infallible {},
-        }
-    }
-}
 
 pub struct Ism43362<'d, SpiInstance, Reset, DataReady, Ssn>
 where
@@ -64,9 +47,9 @@ where
     }
 
     pub async fn reset(&mut self) {
-        self.reset.set_low().unwrap_infallible();
+        self.reset.set_low();
         Timer::after(Duration::from_millis(10)).await;
-        self.reset.set_high().unwrap_infallible();
+        self.reset.set_high();
         Timer::after(Duration::from_millis(500)).await;
     }
 
@@ -110,11 +93,7 @@ where
                 .tuples();
 
             for (b0, b1) in iter {
-                let word = u16::from_le_bytes([b0, b1]);
-                // NOTE: using `transfer` instead of `write` because `write` hangs.
-                //  I assume it's because whatever the device sends back isn't read from the
-                //  data register and so the transfer doesn't finish.
-                self.spi.transfer(&mut [word])?;
+                self.spi.blocking_write(&[u16::from_le_bytes([b0, b1])])?;
             }
         }
 
@@ -129,12 +108,14 @@ where
     pub async fn read(&mut self) -> Result<ArrayVec<u8, 2048>, Error> {
         let mut res = ArrayVec::new();
 
-        while self.data_ready.is_low().unwrap_infallible() {
+        while self.data_ready.is_low() {
             // The data ready pin can go high between checking that it's low and enabling the
             // interrupt and then all networking hangs. Can't enable the interrupt before checking
             // because that takes a `&mut`.
+            let rising = self.data_ready.wait_for_rising_edge();
+            pin_utils::pin_mut!(rising);
             futures::future::select(
-                self.data_ready.wait_for_rising_edge(),
+                rising,
                 Timer::after(Duration::from_millis(500)),
             )
             .await;
@@ -142,9 +123,10 @@ where
 
         let _guard = ChipSelectGuard::new(&mut self.ssn);
 
-        while self.data_ready.is_high().unwrap_infallible() {
+        while self.data_ready.is_high() {
             let mut data = [u16::from_le_bytes(*b"\n\n")];
-            for word in self.spi.transfer(&mut data)? {
+            self.spi.blocking_transfer_in_place(&mut data)?;
+            for word in data {
                 for byte in word.to_ne_bytes() {
                     if !res.is_empty() || byte != 0x15 {
                         res.push(byte);
@@ -161,23 +143,22 @@ where
     }
 }
 
-struct ChipSelectGuard<'a, P: OutputPin<Error = Infallible>> {
-    pin: &'a mut P,
+struct ChipSelectGuard<'a, 'd, P: Pin> {
+    pin: &'a mut Output<'d, P>,
 }
 
-impl<'a, P: OutputPin<Error = Infallible> + StatefulOutputPin<Error = Infallible>>
-    ChipSelectGuard<'a, P>
+impl<'a, 'd, P: Pin> ChipSelectGuard<'a, 'd, P>
 {
-    fn new(pin: &'a mut P) -> Self {
-        assert!(pin.is_set_high().unwrap_infallible());
-        pin.set_low().unwrap_infallible();
+    fn new(pin: &'a mut Output<'d, P>) -> Self {
+        assert!(pin.is_set_high());
+        pin.set_low();
 
         Self { pin }
     }
 }
 
-impl<P: OutputPin<Error = Infallible>> Drop for ChipSelectGuard<'_, P> {
+impl<P: Pin> Drop for ChipSelectGuard<'_, '_, P> {
     fn drop(&mut self) {
-        self.pin.set_high().unwrap_infallible();
+        self.pin.set_high();
     }
 }

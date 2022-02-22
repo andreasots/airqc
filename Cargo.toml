@@ -10,39 +10,25 @@ license = "Apache-2.0"
 [profile.release]
 debug = true
 
-[features]
-default = [
-    "defmt-default",
-]
-defmt-default = []
-defmt-trace = []
-defmt-debug = []
-defmt-info = []
-defmt-warn = []
-defmt-error = []
-
 [dependencies]
 arrayvec = { version = "0.7.1", default-features = false }
 bstr = { version = "0.2.16", default-features = false }
 cortex-m = "0.7.1"
-cortex-m-rt = "0.6.14"
+cortex-m-rt = "0.7.1"
 crc-any = { version = "2.3.12", default-features = false }
-defmt = "0.2.0"
-defmt-rtt = "0.2.0"
-embassy = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "defmt-trace"] }
-embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "defmt-trace", "stm32f413zh", "unstable-pac"] }
+defmt = "0.3.0"
+defmt-rtt = "0.3.1"
+embassy = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "nightly"] }
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "stm32f413zh", "unstable-pac", "time-driver-any", "exti", "memory-x"] }
 embedded-graphics = "0.7.1"
 embedded-hal = "0.2.5"
 futures = { version = "0.3.8", default-features = false, features = ["async-await"] }
 heapless = { version = "0.7.1", default-features = false }
 httparse = { version = "1.4.1", default-features = false }
 itertools = { version = "0.10.1", default-features = false }
-panic-probe = { version = "0.2.0", features= ["print-defmt"] }
+panic-probe = { version = "0.3.0", features= ["print-defmt"] }
+pin-utils = "0.1.0"
 rtt-target = { version = "0.3", features = ["cortex-m"] }
 serde = { version = "1.0.126", default-features = false, features = ["derive"] }
 serde-json-core = "0.4.0"
 st7789 = "0.6.0"
-stm32f4xx-hal = { version = "0.9.0", features = ["fsmc_lcd", "stm32f413"] }
-
-[patch.crates-io]
-stm32f4xx-hal = { git = "https://github.com/stm32-rs/stm32f4xx-hal" }
