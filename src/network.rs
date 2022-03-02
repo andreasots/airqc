@@ -24,6 +24,7 @@ pub enum NetworkError {
     Json,
     Fmt,
     Disconnected,
+    InvalidState,
 }
 
 #[derive(defmt::Format)]
@@ -230,8 +231,18 @@ async fn network_task_inner(
         } else {
             let res = wifi.send_command(b"CS").await?;
             let res = parse_response(&res)??;
-            if res == b"0" {
+            // TODO: the ISM43362 can report an accepted connection at this point
+            if res != b"1" {
                 return Err(NetworkError::Disconnected);
+            }
+
+            let res = wifi.send_command(b"P?").await?;
+            let res = parse_response(&res)??;
+            defmt::debug!("P?: {}", Debug2Format(res.as_bstr()));
+            if !res.starts_with(b"0,0.0.0.0,80,") {
+                // The ISM43362 has accepted a connection but didn't tell us.
+                // TODO: figure out if this can be fixed without resetting.
+                return Err(NetworkError::InvalidState)
             }
 
             Timer::after(Duration::from_millis(500)).await;

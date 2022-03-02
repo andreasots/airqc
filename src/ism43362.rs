@@ -146,7 +146,7 @@ where
         while self.data_ready.is_high() {
             let mut data = [u16::from_le_bytes(*b"\n\n")];
             self.spi.blocking_transfer_in_place(&mut data)?;
-            defmt::debug!("read {:04x}", data[0]);
+            defmt::trace!("read {:04x}", data[0]);
             for word in data {
                 res.try_extend_from_slice(&word.to_ne_bytes())?;
             }
