@@ -30,12 +30,14 @@ dependencies = [
  "heapless",
  "httparse",
  "itertools",
+ "micromath 2.0.0",
  "panic-probe",
  "pin-utils",
  "rtt-target",
  "serde",
  "serde-json-core",
  "st7789",
+ "stm32f4xx-hal",
 ]
 
 [[package]]
@@ -179,9 +181,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.1.1"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d76c22c9b9b215eeb8d016ad3a90417bd13cb24cf8142756e6472445876cab7"
+checksum = "5177fac1ab67102d8989464efd043c6ff44191b1557ec1ddd489b4f7e1447e77"
 dependencies = [
  "atty",
  "bitflags",
@@ -196,9 +198,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.1.0"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd1122e63869df2cb309f449da1ad54a7c6dfeb7c7e6ccd8e0825d9eb93bb72"
+checksum = "01d42c94ce7c2252681b5fed4d3627cc807b13dfc033246bd05d5b252399000e"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -339,8 +341,7 @@ dependencies = [
 [[package]]
 name = "defmt"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62fb5df4d2b06a2dbf6ba26b49031f5f45f1aafdfca4b9259719466d362f34a0"
+source = "git+https://github.com/knurling-rs/defmt#e64138f6ee31dfd786c32e2a7097f0812a19bd54"
 dependencies = [
  "bitflags",
  "defmt-macros",
@@ -349,8 +350,7 @@ dependencies = [
 [[package]]
 name = "defmt-macros"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "098396b763a1786b329405f69bc3677e00d45eb4534bc9f31cd23011ee2ba267"
+source = "git+https://github.com/knurling-rs/defmt#e64138f6ee31dfd786c32e2a7097f0812a19bd54"
 dependencies = [
  "defmt-parser",
  "proc-macro-error",
@@ -362,8 +362,7 @@ dependencies = [
 [[package]]
 name = "defmt-parser"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d1ce010e1a51aef925c98f12ed81a4e0e96ce0185a87c33f1b3b9c8f20749c7"
+source = "git+https://github.com/knurling-rs/defmt#e64138f6ee31dfd786c32e2a7097f0812a19bd54"
 
 [[package]]
 name = "defmt-rtt"
@@ -390,7 +389,7 @@ checksum = "e78d4f1cc4ae33bbfc157ed5d5a5ef3bc29227303d595861deb238fcec4e9457"
 [[package]]
 name = "embassy"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "atomic-polyfill",
  "cfg-if",
@@ -408,7 +407,7 @@ dependencies = [
 [[package]]
 name = "embassy-hal-common"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "cortex-m",
  "embassy",
@@ -419,7 +418,7 @@ dependencies = [
 [[package]]
 name = "embassy-macros"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -430,7 +429,7 @@ dependencies = [
 [[package]]
 name = "embassy-stm32"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "atomic-polyfill",
  "bare-metal 1.0.0",
@@ -456,6 +455,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-dma"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "994f7e5b5cb23521c22304927195f236813053eb9c065dd2226a32ba64695446"
+dependencies = [
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "embedded-graphics"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,7 +473,7 @@ dependencies = [
  "byteorder",
  "embedded-graphics-core",
  "float-cmp",
- "micromath",
+ "micromath 1.1.1",
 ]
 
 [[package]]
@@ -497,12 +505,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal"
+version = "1.0.0-alpha.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93cc714edeae73aa1ff259af4498595360b2992e0e9c59801873ed198a7f2216"
+dependencies = [
+ "nb 1.0.0",
+]
+
+[[package]]
 name = "embedded-hal-async"
 version = "0.0.1"
 source = "git+https://github.com/embassy-rs/embedded-hal?branch=embassy#1fa64a1d2f9cc1a1ae632dbfcc4064a9f6504a3f"
 dependencies = [
  "embedded-hal 1.0.0-alpha.6",
 ]
+
+[[package]]
+name = "embedded-storage"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "723dce4e9f25b6e6c5f35628e144794e5b459216ed7da97b7c4b66cdb3fa82ca"
 
 [[package]]
 name = "env_logger"
@@ -531,6 +554,25 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "fugit"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6d8595783d5ca52f0e9830036b3d24f359fae0fcc6bb5fde41f2dd82997cb58"
+dependencies = [
+ "gcd",
+]
+
+[[package]]
+name = "fugit-timer"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9607bfc4c388f9d629704f56ede4a007546cad417b3bcd6fc7c87dc7edce04a"
+dependencies = [
+ "fugit",
+ "nb 1.0.0",
+]
 
 [[package]]
 name = "futures"
@@ -606,6 +648,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gcd"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f37978dab2ca789938a83b2f8bc1ef32db6633af9051a6cd409eff72cbaaa79a"
+dependencies = [
+ "paste",
+]
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -619,6 +670,15 @@ name = "hashbrown"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+
+[[package]]
+name = "hd44780-driver"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aab2b13fdeaed7dde9133a57c28b2cbde4a8fc8c3196b5631428aad114857d3a"
+dependencies = [
+ "embedded-hal 0.2.7",
+]
 
 [[package]]
 name = "heapless"
@@ -748,6 +808,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc4010833aea396656c2f91ee704d51a6f1329ec2ab56ffd00bfd56f7481ea94"
 
 [[package]]
+name = "micromath"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39617bc909d64b068dcffd0e3e31679195b5576d0c83fadc52690268cc2b2b55"
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,6 +848,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_threads"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97ba99ba6393e2c3734791401b66902d981cb03bf190af674ca69949b6d5fb15"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -805,6 +880,12 @@ dependencies = [
  "cortex-m",
  "defmt",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0744126afe1a6dd7f394cb50a716dbe086cb06e255e53d8d0185d82828358fb5"
 
 [[package]]
 name = "pin-project"
@@ -1105,7 +1186,7 @@ dependencies = [
 [[package]]
 name = "stm32-metapac"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -1116,13 +1197,47 @@ dependencies = [
 [[package]]
 name = "stm32-metapac-gen"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/embassy#697be8bbdcc7db79ebfdf26325ae86672cb6914f"
+source = "git+https://github.com/embassy-rs/embassy#141e007acf5f3c91a9cbd13196c32867bfddd78d"
 dependencies = [
  "chiptool",
  "proc-macro2",
  "regex",
  "serde",
  "serde_yaml",
+]
+
+[[package]]
+name = "stm32f4"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "379f030a0586d0aa3574cb6497392142ddf125c8146b7b580b4b6b46db9d7dc9"
+dependencies = [
+ "bare-metal 1.0.0",
+ "cortex-m",
+ "vcell",
+]
+
+[[package]]
+name = "stm32f4xx-hal"
+version = "0.12.0"
+dependencies = [
+ "bare-metal 1.0.0",
+ "bitflags",
+ "cortex-m",
+ "cortex-m-rt",
+ "display-interface",
+ "embedded-dma",
+ "embedded-hal 0.2.7",
+ "embedded-hal 1.0.0-alpha.7",
+ "embedded-storage",
+ "fugit",
+ "fugit-timer",
+ "hd44780-driver",
+ "nb 1.0.0",
+ "rand_core",
+ "stm32f4",
+ "time",
+ "void",
 ]
 
 [[package]]
@@ -1189,6 +1304,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "time"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "004cbc98f30fa233c61a38bc77e96a9106e65c88f2d3bef182ae952027e5753d"
+dependencies = [
+ "libc",
+ "num_threads",
 ]
 
 [[package]]

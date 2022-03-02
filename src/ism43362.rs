@@ -1,6 +1,6 @@
 use core::fmt::Write;
 
-use arrayvec::{ArrayString, ArrayVec};
+use arrayvec::{ArrayString, ArrayVec, CapacityError};
 use bstr::ByteSlice;
 use defmt::Debug2Format;
 use embassy::time::{Duration, Timer};
@@ -8,8 +8,26 @@ use embassy::util::Unborrow;
 use embassy_stm32::dma::NoDma;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pin, Pull, Speed};
-use embassy_stm32::spi::{Error, Instance, Spi};
+use embassy_stm32::spi::{Error as SpiError, Instance, Spi};
 use itertools::Itertools;
+
+#[derive(defmt::Format)]
+pub enum Error {
+    Spi(SpiError),
+    Buffer(#[defmt(Debug2Format)] CapacityError),
+}
+
+impl From<SpiError> for Error {
+    fn from(err: SpiError) -> Self {
+        Self::Spi(err)
+    }
+}
+
+impl From<CapacityError> for Error {
+    fn from(err: CapacityError) -> Self {
+        Self::Buffer(err)
+    }
+}
 
 pub struct Ism43362<'d, SpiInstance, Reset, DataReady, Ssn>
 where
@@ -108,6 +126,7 @@ where
     pub async fn read(&mut self) -> Result<ArrayVec<u8, 2048>, Error> {
         let mut res = ArrayVec::new();
 
+        defmt::debug!("waiting for data to be ready");
         while self.data_ready.is_low() {
             // The data ready pin can go high between checking that it's low and enabling the
             // interrupt and then all networking hangs. Can't enable the interrupt before checking
@@ -120,20 +139,25 @@ where
             )
             .await;
         }
+        defmt::debug!("data is ready");
 
         let _guard = ChipSelectGuard::new(&mut self.ssn);
 
         while self.data_ready.is_high() {
             let mut data = [u16::from_le_bytes(*b"\n\n")];
             self.spi.blocking_transfer_in_place(&mut data)?;
+            defmt::debug!("read {:04x}", data[0]);
             for word in data {
-                for byte in word.to_ne_bytes() {
-                    if !res.is_empty() || byte != 0x15 {
-                        res.push(byte);
-                    }
-                }
+                res.try_extend_from_slice(&word.to_ne_bytes())?;
             }
         }
+
+        // The 0x1515 prepadding is filtered out here so that we don't loop infinitely in the read loop.
+        let start = match res.iter().enumerate().find(|(_, b)| **b != 0x15) {
+            Some((start, _)) => start,
+            None => return Ok(ArrayVec::new()),
+        };
+        res.drain(..start);
 
         while let Some(0x15) = res.last() {
             res.pop();

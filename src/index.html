@@ -23,6 +23,9 @@
     <div class="canvas-wrapper"><canvas id="mix8410-voltage" width="400" height="400"></canvas></div>
     <div class="canvas-wrapper"><canvas id="mix8410-concentration" width="400" height="400"></canvas></div>
 
+    <div class="canvas-wrapper"><canvas id="sgp30-co2eq" width="400" height="400"></canvas></div>
+    <div class="canvas-wrapper"><canvas id="sgp30-tvoc" width="400" height="400"></canvas></div>
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/luxon"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
@@ -217,6 +220,67 @@
             },
         });
 
+        let sgp30_co2eq = new Chart('sgp30-co2eq', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'SGP30: CO2 eqivalent',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 400,
+                        suggestedMax: 1000,
+                        ticks: {
+                            callback: (value, index, values) => value + ' ppm',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        let sgp30_tvoc = new Chart('sgp30-tvoc', {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'SGP30: total volatile organic compounds',
+                    borderColor: 'red',
+                    data: [],
+                }],
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        suggestedMin: 0,
+                        suggestedMax: 10,
+                        ticks: {
+                            callback: (value, index, values) => value + ' ppb',
+                        }
+                    },
+                    x: {
+                        type: 'timeseries',
+                    },
+                },
+            },
+        });
+
+        function append(chart, label, value) {
+            chart.data.labels.push(label);
+            chart.data.labels = chart.data.labels.slice(-500);
+            chart.data.datasets[0].data.push(value);
+            chart.data.datasets[0].data = chart.data.datasets[0].data.slice(-500);
+            chart.update();
+        }
 
         window.setInterval(() => {
             fetch("/measurements")
@@ -224,33 +288,18 @@
                 .then(data => {
                     let now = new Date();
 
-                    scd30_co2.data.labels.push(now);
-                    scd30_co2.data.datasets[0].data.push(data.scd30.co2);
-                    scd30_co2.update();
+                    append(scd30_co2, now, data.scd30.co2);
+                    append(scd30_temperature, now, data.scd30.temperature);
+                    append(scd30_humidity, now, data.scd30.humidity);
 
-                    scd30_temperature.data.labels.push(now);
-                    scd30_temperature.data.datasets[0].data.push(data.scd30.temperature);
-                    scd30_temperature.update();
+                    append(hp206c_pressure, now, data.hp206c.pressure / 100);
+                    append(hp206c_temperature, now, data.hp206c.temperature / 100);
 
-                    scd30_humidity.data.labels.push(now);
-                    scd30_humidity.data.datasets[0].data.push(data.scd30.humidity);
-                    scd30_humidity.update();
+                    append(mix8410_voltage, now, data.mix8410.voltage / 1000);
+                    append(mix8410_concentration, now, data.mix8410.concentration);
 
-                    hp206c_pressure.data.labels.push(now);
-                    hp206c_pressure.data.datasets[0].data.push(data.hp206c.pressure / 100);
-                    hp206c_pressure.update();
-
-                    hp206c_temperature.data.labels.push(now);
-                    hp206c_temperature.data.datasets[0].data.push(data.hp206c.temperature / 100);
-                    hp206c_temperature.update();
-
-                    mix8410_voltage.data.labels.push(now);
-                    mix8410_voltage.data.datasets[0].data.push(data.mix8410.voltage / 1000);
-                    mix8410_voltage.update();
-
-                    mix8410_concentration.data.labels.push(now);
-                    mix8410_concentration.data.datasets[0].data.push(data.mix8410.concentration);
-                    mix8410_concentration.update();
+                    append(sgp30_co2eq, now, data.sgp30.co2eq);
+                    append(sgp30_tvoc, now, data.sgp30.tvoc);
                 });
         }, 4000);
     </script>

@@ -3,21 +3,20 @@ use core::fmt::{Display, Write};
 use core::num::ParseIntError;
 use core::str::{FromStr, Utf8Error};
 
-use crate::ism43362::Ism43362;
+use crate::ism43362::{Ism43362, Error as Ism43362Error};
 
 use arrayvec::{ArrayString, ArrayVec, CapacityError};
 use bstr::ByteSlice;
 use defmt::Debug2Format;
 use embassy::time::{Duration, Timer};
 use embassy_stm32::peripherals::{PG11, PG12, PH1, SPI3};
-use embassy_stm32::spi::Error as SpiError;
 use httparse::{Request, Status};
 
 const WIFI_NETWORKS: [(&[u8], &[u8]); 2] = [];
 
 #[derive(defmt::Format)]
 pub enum NetworkError {
-    Spi(SpiError),
+    Spi(Ism43362Error),
     Limit,
     Prompt,
     Parse(ParseError),
@@ -36,8 +35,8 @@ pub enum ParseError {
     Integer,
 }
 
-impl From<SpiError> for NetworkError {
-    fn from(err: SpiError) -> Self {
+impl From<Ism43362Error> for NetworkError {
+    fn from(err: Ism43362Error) -> Self {
         Self::Spi(err)
     }
 }
@@ -367,6 +366,11 @@ async fn handle_connection(
                         measurement.concentration
                     )
                     .unwrap();
+                }
+
+                if let Some(measurement) = readouts.sgp30 {
+                    writeln!(adaptor, "sgp30_co2eq {}", measurement.co2eq).unwrap();
+                    writeln!(adaptor, "sgp30_tvoc: {}", measurement.tvoc).unwrap();
                 }
             }
 

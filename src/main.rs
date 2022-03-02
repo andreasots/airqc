@@ -4,6 +4,11 @@
 
 use arrayvec::ArrayString;
 use embassy_stm32::adc::{Adc, Resolution, SampleTime};
+use sgp30::Sgp30;
+use stm32f4xx_hal::fsmc_lcd::{LcdPins, ChipSelect3, Timing, FsmcLcd, Lcd, SubBank3};
+use stm32f4xx_hal::gpio::{GpioExt, PB13, PushPull};
+use stm32f4xx_hal::watchdog::IndependentWatchdog;
+use stm32f4xx_hal::prelude::*;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 use defmt_rtt as _;
@@ -37,6 +42,7 @@ mod hp206c;
 mod ism43362;
 mod network;
 mod scd30;
+mod sgp30;
 
 static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -60,6 +66,7 @@ struct Readouts {
     scd30: Option<Scd30Readout>,
     hp206c: Option<Hp206cReadout>,
     mix8410: Option<Mix8410Readout>,
+    sgp30: Option<Sgp30Readout>,
 }
 
 #[derive(Clone, Copy, defmt::Format, Serialize)]
@@ -67,6 +74,12 @@ struct Scd30Readout {
     co2: f32,
     temperature: f32,
     humidity: f32,
+}
+
+#[derive(Clone, Copy, defmt::Format, Serialize)]
+struct Sgp30Readout {
+    co2eq: u16,
+    tvoc: u16,
 }
 
 #[derive(Clone, Copy, defmt::Format, Serialize)]
@@ -86,6 +99,7 @@ fn with_readouts<T>(f: impl FnOnce(&mut Readouts) -> T) -> T {
         scd30: None,
         hp206c: None,
         mix8410: None,
+        sgp30: None,
     };
 
     cortex_m::interrupt::free(|_| {
@@ -128,6 +142,7 @@ async fn measurement_task(
     mut i2c2: I2c<'static, I2C2>,
     mut adc1: Adc<'static, ADC1>,
     mut oxygen_sensor: PC0,
+    mut watchdog: IndependentWatchdog,
 ) {
     // Calibration measurement: 2633 mV
     //  * at a temperature of 18.69 °C
@@ -144,9 +159,14 @@ async fn measurement_task(
     Timer::after(Duration::from_millis(500)).await;
 
     let mut scd30 = Scd30::new();
+    let mut sgp30 = Sgp30::new();
+
+    defmt::unwrap!(sgp30.init_air_quality(&mut i2c2));
 
     let mut ticker = Ticker::every(Duration::from_secs(1)).enumerate();
     while let Some((i, ())) = ticker.next().await {
+        watchdog.feed();
+
         let o2_sample = adc1.read(&mut oxygen_sensor);
         let o2_sample_mv = adc1.to_millivolts(o2_sample);
         let o2_concentration = o2_sample_mv as f32 * O2_VOLTAGE_TO_CONCENTRATION;
@@ -165,6 +185,8 @@ async fn measurement_task(
             }
         };
 
+        let (co2eq, tvoc) = defmt::unwrap!(sgp30.measure_air_quality(&mut i2c2).await);
+
         with_readouts(|readouts| {
             readouts.hp206c = Some(Hp206cReadout {
                 pressure,
@@ -174,6 +196,10 @@ async fn measurement_task(
                 voltage: o2_sample_mv,
                 concentration: o2_concentration,
             });
+            readouts.sgp30 = Some(Sgp30Readout {
+                co2eq,
+                tvoc,
+            })
         });
 
         if i % 1024 == 0 {
@@ -183,15 +209,21 @@ async fn measurement_task(
         }
 
         if defmt::unwrap!(retry_crc_errors(|| scd30.is_data_ready(&mut i2c2))) {
-            let (co2, temperature, humidity) = defmt::unwrap!(scd30.read_measurement(&mut i2c2));
+            let (co2, scd30_temperature, humidity) = defmt::unwrap!(scd30.read_measurement(&mut i2c2));
 
             with_readouts(|readouts| {
                 readouts.scd30 = Some(Scd30Readout {
                     co2,
-                    temperature,
+                    temperature: scd30_temperature,
                     humidity,
                 });
             });
+
+            if i % 1024 == 0 {
+                let absolute_humidity = Sgp30::relative_humidity_to_absolute(humidity / 100.0, temperature as f32 / 100.0);
+                defmt::info!("SGP30: recalibrating to {} + {}/256 g/m^3", absolute_humidity / 256, absolute_humidity % 256);
+                defmt::unwrap!(sgp30.set_humidity(&mut i2c2, absolute_humidity));
+            }
         }
     }
 }
@@ -239,6 +271,14 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
             writeln!(str, "MIX8410-O2: XXXXXXXX%").unwrap();
         }
 
+        if let Some(measurement) = measurement.sgp30 {
+            writeln!(str, "SGP30: CO2eq: {:5} ppm", measurement.co2eq).unwrap();
+            writeln!(str, "SGP30: TVOC: {:6} ppb", measurement.tvoc).unwrap();
+        } else {
+            writeln!(str, "SGP30: CO2eq: XXXXX ppm").unwrap();
+            writeln!(str, "SGP30: TVOC: XXXXXX pbm").unwrap();
+        }
+
         let text_style = MonoTextStyleBuilder::new()
             .font(&FONT_10X20)
             .text_color(Rgb565::WHITE)
@@ -270,8 +310,11 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
 async fn main(spawner: Spawner, device: Peripherals) {
     defmt::info!("System started");
 
+    // NOTE: it's probably unwise to have two PAC crates...
+    let hal = defmt::unwrap!(stm32f4xx_hal::pac::Peripherals::take());
+
     // Enable system clocks in low power mode
-    /*hal.DBGMCU.cr.modify(|_, w| {
+    hal.DBGMCU.cr.modify(|_, w| {
         w.dbg_sleep().set_bit();
         w.dbg_standby().set_bit();
         w.dbg_stop().set_bit()
@@ -292,7 +335,6 @@ async fn main(spawner: Spawner, device: Peripherals) {
 
     // IMPORTANT: `GpioExt::split` resets the GPIO port so it must be called before the pins get configured by embassy.
     let gpiob = hal.GPIOB.split();
-    let gpioc = hal.GPIOC.split();
     let gpiod = hal.GPIOD.split();
     let gpioe = hal.GPIOE.split();
     let gpiof = hal.GPIOF.split();
@@ -300,7 +342,6 @@ async fn main(spawner: Spawner, device: Peripherals) {
 
     // Enable the system configuration controller clock
     hal.RCC.apb2enr.modify(|_, w| w.syscfgen().enabled());
-    */
 
     let button = ExtiInput::new(Input::new(device.PA0, Pull::Down), device.EXTI0);
     let lcd_backlight = Output::new(
@@ -315,7 +356,7 @@ async fn main(spawner: Spawner, device: Peripherals) {
 
     let i2c2 = I2c::new(device.I2C2, device.PB10, device.PB11, 100u32.khz());
 
-    let adc1 = Adc::new(device.ADC1, &mut Delay);
+    let mut adc1 = Adc::new(device.ADC1, &mut Delay);
     adc1.set_sample_time(SampleTime::Cycles480);
     adc1.set_resolution(Resolution::TwelveBit);
     let oxygen_sensor = device.PC0;
@@ -390,8 +431,12 @@ async fn main(spawner: Spawner, device: Peripherals) {
         device.PG11,
     );
 
+    let mut watchdog = IndependentWatchdog::new(hal.IWDG);
+    watchdog.stop_on_debug(&hal.DBGMCU, true);
+    watchdog.start(32.secs());
+
     defmt::unwrap!(spawner.spawn(button_task(button, lcd_backlight)));
-    defmt::unwrap!(spawner.spawn(measurement_task(i2c2, adc1, oxygen_sensor)));
+    defmt::unwrap!(spawner.spawn(measurement_task(i2c2, adc1, oxygen_sensor, watchdog)));
     defmt::unwrap!(spawner.spawn(display_task(lcd)));
     defmt::unwrap!(spawner.spawn(crate::network::network_task(wifi)));
 }
