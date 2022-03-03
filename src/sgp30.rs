@@ -71,7 +71,7 @@ impl Sgp30 {
         let mut cmd = [0; 5];
         cmd[0..2].copy_from_slice(&0x2061u16.to_be_bytes());
         cmd[2..4].copy_from_slice(&humidity.to_be_bytes());
-        cmd[4] = self.crc8(&humidity.to_be_bytes());
+        cmd[4] = self.crc8(&cmd[2..4]);
         i2c.write(ADDRESS, &cmd)?;
 
         Ok(())
