@@ -3,7 +3,7 @@ use core::fmt::{Display, Write};
 use core::num::ParseIntError;
 use core::str::{FromStr, Utf8Error};
 
-use crate::ism43362::{Ism43362, Error as Ism43362Error};
+use crate::ism43362::{Error as Ism43362Error, Ism43362};
 
 use arrayvec::{ArrayString, ArrayVec, CapacityError};
 use bstr::ByteSlice;
@@ -242,7 +242,7 @@ async fn network_task_inner(
             if !res.starts_with(b"0,0.0.0.0,80,") {
                 // The ISM43362 has accepted a connection but didn't tell us.
                 // TODO: figure out if this can be fixed without resetting.
-                return Err(NetworkError::InvalidState)
+                return Err(NetworkError::InvalidState);
             }
 
             Timer::after(Duration::from_millis(500)).await;
@@ -381,7 +381,7 @@ async fn handle_connection(
 
                 if let Some(measurement) = readouts.sgp30 {
                     writeln!(adaptor, "sgp30_co2eq {}", measurement.co2eq).unwrap();
-                    writeln!(adaptor, "sgp30_tvoc: {}", measurement.tvoc).unwrap();
+                    writeln!(adaptor, "sgp30_tvoc {}", measurement.tvoc).unwrap();
                 }
             }
 
