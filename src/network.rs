@@ -8,11 +8,14 @@ use crate::ism43362::{Error as Ism43362Error, Ism43362};
 use arrayvec::{ArrayString, ArrayVec, CapacityError};
 use bstr::ByteSlice;
 use defmt::Debug2Format;
-use embassy::time::{Duration, Timer};
 use embassy_stm32::peripherals::{PG11, PG12, PH1, SPI3};
+use embassy_time::{Duration, Timer};
 use httparse::{Request, Status};
 
-const WIFI_NETWORKS: [(&[u8], &[u8]); 2] = [];
+// Built from `wifi-networks.csv`. Expands to: ```rust
+//     const WIFI_NETWORKS: [(&[u8], &[u8]); _] = ...;
+// ```
+include!(concat!(env!("OUT_DIR"), "/wifi-networks.rs"));
 
 #[derive(defmt::Format)]
 pub enum NetworkError {
@@ -99,7 +102,7 @@ fn connect_set_passphrase(passphrase: &[u8]) -> Result<ArrayVec<u8, { 3 + 63 }>,
     Ok(command)
 }
 
-#[embassy::task]
+#[embassy_executor::task]
 pub async fn network_task(mut wifi: Ism43362<'static, SPI3, PH1, PG12, PG11>) {
     loop {
         wifi.reset().await;
@@ -107,7 +110,7 @@ pub async fn network_task(mut wifi: Ism43362<'static, SPI3, PH1, PG12, PG11>) {
         if let Err(err) = network_task_inner(&mut wifi).await {
             defmt::error!("Network task failed: {}", err);
         }
-        crate::with_network_info(|info| *info = None);
+        *crate::NETWORK_INFO.lock().await = None;
 
         Timer::after(Duration::from_secs(5)).await;
     }
@@ -172,16 +175,14 @@ async fn network_task_inner(
         }
     };
 
-    crate::with_network_info(|info| {
-        let mut ssid_as_str = ArrayString::new();
-        for chunk in ssid.utf8_chunks() {
-            ssid_as_str.push_str(chunk.valid());
-            if !chunk.invalid().is_empty() {
-                ssid_as_str.push('\u{FFFD}');
-            }
+    let mut ssid_as_str = ArrayString::new();
+    for chunk in ssid.utf8_chunks() {
+        ssid_as_str.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            ssid_as_str.push('\u{FFFD}');
         }
-        *info = Some((ssid_as_str, ip));
-    });
+    }
+    *crate::NETWORK_INFO.lock().await = Some((ssid_as_str, ip));
 
     defmt::info!(
         "Connected to a WiFi network: SSID: {}; IP: {}",
@@ -343,7 +344,7 @@ async fn handle_connection(
         Route::GetMeasurements => {
             while let Ok(()) = body.try_push(0) {}
 
-            let readouts = crate::with_readouts(|readouts| *readouts);
+            let readouts = crate::READOUTS.lock().await.clone();
             let bytes = serde_json_core::to_slice(&readouts, &mut body)?;
             body.truncate(bytes);
 
@@ -353,35 +354,59 @@ async fn handle_connection(
             )
         }
         Route::GetMetrics => {
-            let readouts = crate::with_readouts(|readouts| *readouts);
+            let readouts = crate::READOUTS.lock().await.clone();
 
             {
                 let mut adaptor = WriteAdaptor(&mut body);
 
                 if let Some(measurement) = readouts.scd30 {
-                    writeln!(adaptor, "scd30_co2 {}", measurement.co2)?;
-                    writeln!(adaptor, "scd30_temperature {}", measurement.temperature)?;
-                    writeln!(adaptor, "scd30_relative_humidity {}", measurement.humidity)?;
+                    writeln!(
+                        adaptor,
+                        "air_co2_concentration_ppm{{sensor=SCD30}} {}",
+                        measurement.co2
+                    )?;
+                    writeln!(
+                        adaptor,
+                        "air_temperature_celsius{{sensor=SCD30}} {}",
+                        measurement.temperature
+                    )?;
+                    writeln!(
+                        adaptor,
+                        "air_relative_humidity_percent{{sensor=SCD30}} {}",
+                        measurement.humidity
+                    )?;
                 }
 
                 if let Some(measurement) = readouts.hp206c {
-                    writeln!(adaptor, "hp206c_pressure {}", measurement.pressure)?;
-                    writeln!(adaptor, "hp206c_temperature {}", measurement.temperature)?;
+                    writeln!(
+                        adaptor,
+                        "air_pressure_pascals{{sensor=HP206C}} {}",
+                        measurement.pressure
+                    )?;
+                    writeln!(
+                        adaptor,
+                        "air_temperature_celsius{{sensor=HP206C}} {}",
+                        measurement.temperature as f32 / 100.0,
+                    )?;
                 }
 
                 if let Some(measurement) = readouts.mix8410 {
-                    writeln!(adaptor, "mix8410_o2_voltage {}", measurement.voltage).unwrap();
                     writeln!(
                         adaptor,
-                        "mix8410_o2_concentration {}",
+                        "air_o2_concentration_percent{{sensor=MIX8410}} {}",
                         measurement.concentration
                     )
                     .unwrap();
                 }
 
                 if let Some(measurement) = readouts.sgp30 {
-                    writeln!(adaptor, "sgp30_co2eq {}", measurement.co2eq).unwrap();
-                    writeln!(adaptor, "sgp30_tvoc {}", measurement.tvoc).unwrap();
+                    writeln!(
+                        adaptor,
+                        "air_tvoc_co2eq_ppm{{sensor=SGP30}} {}",
+                        measurement.co2eq
+                    )
+                    .unwrap();
+                    writeln!(adaptor, "air_tvoc_ppb{{sensor=SGP30}} {}", measurement.tvoc).unwrap();
                 }
             }
 

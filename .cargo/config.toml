@@ -2,8 +2,5 @@
 target = "thumbv7em-none-eabi"
 
 [target.thumbv7em-none-eabi]
-rustflags = [
-  "-C", "link-arg=-Tlink.x",
-  "-C", "link-arg=-Tdefmt.x",
-]
-runner = ["probe-run", "--chip", "STM32F413ZHTx"]
+rustflags = ["-C", "link-arg=-Tlink.x", "-C", "link-arg=-Tdefmt.x"]
+runner = ["probe-rs", "run", "--chip", "STM32F413ZHTx"]

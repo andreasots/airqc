@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2018"
 resolver = "2"
 license = "Apache-2.0"
+build = "build.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -12,29 +13,24 @@ debug = true
 
 [dependencies]
 arrayvec = { version = "0.7.1", default-features = false }
-bstr = { version = "0.2.16", default-features = false }
-cortex-m = "0.7.1"
+bstr = { version = "1.9.1", default-features = false }
+cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.1"
 crc-any = { version = "2.3.12", default-features = false }
 defmt = "0.3.0"
-defmt-rtt = "0.3.1"
-embassy = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "nightly"] }
-embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", features = ["defmt", "stm32f413zh", "unstable-pac", "time-driver-any", "exti", "memory-x"] }
+defmt-rtt = "0.4.1"
+display-interface = "0.4.1"
+embassy-executor = { version = "0.5.0", features = ["defmt", "integrated-timers", "arch-cortex-m", "executor-thread", "task-arena-size-65536"] }
+embassy-stm32 = { version = "0.1.0", features = ["defmt", "stm32f413zh", "unstable-pac", "time-driver-any", "exti", "memory-x"] }
+embassy-time = "0.3.1"
+embassy-sync = "0.6.0"
 embedded-graphics = "0.7.1"
-embedded-hal = "0.2.5"
 futures = { version = "0.3.8", default-features = false, features = ["async-await"] }
-heapless = { version = "0.7.1", default-features = false }
 httparse = { version = "1.4.1", default-features = false }
-itertools = { version = "0.10.1", default-features = false }
+itertools = { version = "0.13.0", default-features = false }
 micromath = "2.0.0"
 panic-probe = { version = "0.3.0", features= ["print-defmt"] }
 pin-utils = "0.1.0"
-rtt-target = { version = "0.3", features = ["cortex-m"] }
 serde = { version = "1.0.126", default-features = false, features = ["derive"] }
-serde-json-core = "0.4.0"
-st7789 = "0.6.0"
-stm32f4xx-hal = { version = "0.12.0", features = ["fsmc_lcd", "stm32f413"] }
-
-[patch.crates-io]
-stm32f4xx-hal = { path = "../stm32f4xx-hal" }
-defmt = { git = "https://github.com/knurling-rs/defmt" }
+serde-json-core = "0.5.1"
+st7789 = "0.7.0"

@@ -3,12 +3,12 @@ use core::fmt::Write;
 use arrayvec::{ArrayString, ArrayVec, CapacityError};
 use bstr::ByteSlice;
 use defmt::Debug2Format;
-use embassy::time::{Duration, Timer};
-use embassy::util::Unborrow;
-use embassy_stm32::dma::NoDma;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pin, Pull, Speed};
+use embassy_stm32::peripherals::{DMA1_CH0, DMA1_CH5};
 use embassy_stm32::spi::{Error as SpiError, Instance, Spi};
+use embassy_stm32::Peripheral;
+use embassy_time::{Duration, Timer};
 use itertools::Itertools;
 
 #[derive(defmt::Format)]
@@ -36,7 +36,7 @@ where
     DataReady: Pin,
     Ssn: Pin,
 {
-    spi: Spi<'d, SpiInstance, NoDma, NoDma>,
+    spi: Spi<'d, SpiInstance, DMA1_CH5, DMA1_CH0>,
     reset: Output<'d, Reset>,
     data_ready: ExtiInput<'d, DataReady>,
     ssn: Output<'d, Ssn>,
@@ -50,11 +50,11 @@ where
     Ssn: Pin,
 {
     pub fn new(
-        spi: Spi<'d, SpiInstance, NoDma, NoDma>,
-        reset: impl Unborrow<Target = Reset> + 'd,
-        data_ready: impl Unborrow<Target = DataReady> + 'd,
-        data_ready_exti_channel: impl Unborrow<Target = DataReady::ExtiChannel> + 'd,
-        ssn: impl Unborrow<Target = Ssn> + 'd,
+        spi: Spi<'d, SpiInstance, DMA1_CH5, DMA1_CH0>,
+        reset: impl Peripheral<P = Reset> + 'd,
+        data_ready: impl Peripheral<P = DataReady> + 'd,
+        data_ready_exti_channel: impl Peripheral<P = DataReady::ExtiChannel> + 'd,
+        ssn: impl Peripheral<P = Ssn> + 'd,
     ) -> Self {
         Self {
             spi,
@@ -133,11 +133,7 @@ where
             // because that takes a `&mut`.
             let rising = self.data_ready.wait_for_rising_edge();
             pin_utils::pin_mut!(rising);
-            futures::future::select(
-                rising,
-                Timer::after(Duration::from_millis(500)),
-            )
-            .await;
+            futures::future::select(rising, Timer::after(Duration::from_millis(500))).await;
         }
         defmt::debug!("data is ready");
 
@@ -171,8 +167,7 @@ struct ChipSelectGuard<'a, 'd, P: Pin> {
     pin: &'a mut Output<'d, P>,
 }
 
-impl<'a, 'd, P: Pin> ChipSelectGuard<'a, 'd, P>
-{
+impl<'a, 'd, P: Pin> ChipSelectGuard<'a, 'd, P> {
     fn new(pin: &'a mut Output<'d, P>) -> Self {
         assert!(pin.is_set_high());
         pin.set_low();

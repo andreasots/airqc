@@ -1,7 +1,6 @@
 use crc_any::CRCu8;
-use embassy::time::{Duration, Timer};
-use embassy_stm32::i2c::{Error as I2cError, I2c, Instance};
-use embedded_hal::blocking::i2c::{Read, Write};
+use embassy_stm32::i2c::{Error as I2cError, I2c, Instance, RxDma, TxDma};
+use embassy_time::{Duration, Timer};
 use micromath::F32Ext;
 
 const ADDRESS: u8 = 0x58;
@@ -37,23 +36,23 @@ impl Sgp30 {
         crc
     }
 
-    pub fn init_air_quality<I2C: Instance>(
+    pub async fn init_air_quality<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
         &mut self,
-        i2c: &mut I2c<I2C>,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
     ) -> Result<(), Error> {
         defmt::debug!("SGP30: write(init_air_quality)");
-        i2c.write(ADDRESS, &0x2003u16.to_be_bytes())?;
+        i2c.write(ADDRESS, &0x2003u16.to_be_bytes()).await?;
         Ok(())
     }
 
-    pub async fn measure_air_quality<I2C: Instance>(
+    pub async fn measure_air_quality<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
         &mut self,
-        i2c: &mut I2c<'_, I2C>,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
     ) -> Result<(u16, u16), Error> {
         let mut buffer = [0; 6];
-        i2c.write(ADDRESS, &0x2008u16.to_be_bytes())?;
+        i2c.write(ADDRESS, &0x2008u16.to_be_bytes()).await?;
         Timer::after(Duration::from_millis(12)).await;
-        i2c.read(ADDRESS, &mut buffer)?;
+        i2c.read(ADDRESS, &mut buffer).await?;
 
         for chunk in buffer.chunks(3) {
             if self.crc8(&chunk[0..2]) != chunk[2] {
@@ -67,12 +66,16 @@ impl Sgp30 {
         Ok((co2eq, tvoc))
     }
 
-    pub fn set_humidity<I2C: Instance>(&mut self, i2c: &mut I2c<I2C>, humidity: u16) -> Result<(), Error> {
+    pub async fn set_humidity<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
+        &mut self,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
+        humidity: u16,
+    ) -> Result<(), Error> {
         let mut cmd = [0; 5];
         cmd[0..2].copy_from_slice(&0x2061u16.to_be_bytes());
         cmd[2..4].copy_from_slice(&humidity.to_be_bytes());
         cmd[4] = self.crc8(&cmd[2..4]);
-        i2c.write(ADDRESS, &cmd)?;
+        i2c.write(ADDRESS, &cmd).await?;
 
         Ok(())
     }
@@ -85,7 +88,7 @@ impl Sgp30 {
             611.15 * ((23.036 - temp / 333.7) * (temp / (279.82 + temp))).exp()
         };
         let partial_pressure = rh * saturated;
-        
+
         // Ideal gas law
         // pressure = density * universal gas constant * temperature / molar mass
         // density = pressure * molar mass / (universal gas constant * temperature)

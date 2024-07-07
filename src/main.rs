@@ -1,43 +1,40 @@
 #![no_main]
 #![no_std]
-#![feature(type_alias_impl_trait)]
 
 use arrayvec::ArrayString;
-use embassy_stm32::adc::{Adc, Resolution, SampleTime};
-use sgp30::Sgp30;
-use stm32f4xx_hal::fsmc_lcd::{LcdPins, ChipSelect3, Timing, FsmcLcd, Lcd, SubBank3};
-use stm32f4xx_hal::gpio::{GpioExt, PB13, PushPull};
-use stm32f4xx_hal::watchdog::IndependentWatchdog;
-use stm32f4xx_hal::prelude::*;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 use defmt_rtt as _;
-use embassy::executor::Spawner;
-use embassy::time::{Delay, Duration, Ticker, Timer};
-use embassy_stm32::dma::NoDma;
+use embassy_executor::Spawner;
+use embassy_stm32::adc::{Adc, Resolution, SampleTime};
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
-use embassy_stm32::i2c::{Error as I2cError, I2c};
-use embassy_stm32::peripherals::{I2C2, PA0, PE5, PC0, ADC1};
+use embassy_stm32::i2c::{Error as I2cError, ErrorInterruptHandler, EventInterruptHandler, I2c};
+use embassy_stm32::peripherals::{ADC1, DMA1_CH2, DMA1_CH7, I2C2, IWDG, PA0, PB13, PC0, PE5};
 use embassy_stm32::spi::{BitOrder, Config, Spi, MODE_0};
-use embassy_stm32::time::U32Ext;
-use embassy_stm32::Peripherals;
+use embassy_stm32::wdg::IndependentWatchdog;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::mutex::Mutex;
+use embassy_time::{Delay, Duration, Ticker, Timer};
 use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyleBuilder;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::Text;
+use fsmc::FsmcLcd;
 use futures::StreamExt;
 use panic_probe as _;
 use scd30::Scd30;
 use serde::Serialize;
+use sgp30::Sgp30;
 use st7789::{Orientation, ST7789};
 
 use crate::hp206c::Hp206c;
 use crate::ism43362::Ism43362;
 use crate::network::Ipv4Addr;
 
+mod fsmc;
 mod hp206c;
 mod ism43362;
 mod network;
@@ -46,7 +43,7 @@ mod sgp30;
 
 static DISPLAY_ENABLED: AtomicBool = AtomicBool::new(false);
 
-#[embassy::task]
+#[embassy_executor::task]
 async fn button_task(mut button: ExtiInput<'static, PA0>, mut lcd_backlight: Output<'static, PE5>) {
     loop {
         button.wait_for_falling_edge().await;
@@ -94,56 +91,27 @@ struct Mix8410Readout {
     concentration: f32,
 }
 
-fn with_readouts<T>(f: impl FnOnce(&mut Readouts) -> T) -> T {
-    static mut READOUTS: Readouts = Readouts {
-        scd30: None,
-        hp206c: None,
-        mix8410: None,
-        sgp30: None,
-    };
+static READOUTS: Mutex<CriticalSectionRawMutex, Readouts> = Mutex::new(Readouts {
+    scd30: None,
+    hp206c: None,
+    mix8410: None,
+    sgp30: None,
+});
 
-    cortex_m::interrupt::free(|_| {
-        // `bare-metal`'s Mutex sucks ass and we have to use a `static mut` anyway.
-        // SAFETY:
-        //  * we're on a single core CPU with interrupts disabled
-        //  * the static is only visible in this function
-        unsafe { f(&mut READOUTS) }
-    })
-}
+static NETWORK_INFO: Mutex<CriticalSectionRawMutex, Option<(ArrayString<{ 32 * 3 }>, Ipv4Addr)>> =
+    Mutex::new(None);
 
-fn with_network_info<T>(
-    f: impl FnOnce(&mut Option<(ArrayString<{ 32 * 3 }>, Ipv4Addr)>) -> T,
-) -> T {
-    static mut NETWORK_INFO: Option<(ArrayString<{ 32 * 3 }>, Ipv4Addr)> = None;
-
-    cortex_m::interrupt::free(|_| {
-        // `bare-metal`'s Mutex sucks ass and we have to use a `static mut` anyway.
-        // SAFETY:
-        //  * we're on a single core CPU with interrupts disabled
-        //  * the static is only visible in this function
-        unsafe { f(&mut NETWORK_INFO) }
-    })
-}
-
-fn retry_crc_errors<T>(
-    mut f: impl FnMut() -> Result<T, crate::scd30::Error>,
-) -> Result<T, crate::scd30::Error> {
-    for _ in 0..3 {
-        match f() {
-            Err(crate::scd30::Error::Crc8) => continue,
-            res => return res,
-        }
-    }
-    Err(crate::scd30::Error::Crc8)
-}
-
-#[embassy::task]
+#[embassy_executor::task]
 async fn measurement_task(
-    mut i2c2: I2c<'static, I2C2>,
+    mut i2c2: I2c<'static, I2C2, DMA1_CH7, DMA1_CH2>,
     mut adc1: Adc<'static, ADC1>,
     mut oxygen_sensor: PC0,
-    mut watchdog: IndependentWatchdog,
+    mut watchdog: IndependentWatchdog<'static, IWDG>,
 ) {
+    // Internal reference voltage (V_REFINT) in millivolts.
+    // From "Table 84. Embedded internal reference voltage" in the datasheet for STM32F413ZH (document DS11581).
+    const V_REFINT_MV: u32 = 1210;
+
     // Calibration measurement: 2633 mV
     //  * at a temperature of 18.69 °C
     //  * at a relative humidity of 60.81%
@@ -161,14 +129,17 @@ async fn measurement_task(
     let mut scd30 = Scd30::new();
     let mut sgp30 = Sgp30::new();
 
-    defmt::unwrap!(sgp30.init_air_quality(&mut i2c2));
+    let mut vrefint = adc1.enable_vrefint();
+
+    defmt::unwrap!(sgp30.init_air_quality(&mut i2c2).await);
 
     let mut ticker = Ticker::every(Duration::from_secs(1)).enumerate();
     while let Some((i, ())) = ticker.next().await {
-        watchdog.feed();
+        watchdog.pet();
 
+        let v_refint_sample = adc1.read(&mut vrefint);
         let o2_sample = adc1.read(&mut oxygen_sensor);
-        let o2_sample_mv = adc1.to_millivolts(o2_sample);
+        let o2_sample_mv = (o2_sample as u32 * V_REFINT_MV / (v_refint_sample as u32)) as u16;
         let o2_concentration = o2_sample_mv as f32 * O2_VOLTAGE_TO_CONCENTRATION;
 
         let (pressure, temperature) = loop {
@@ -187,7 +158,9 @@ async fn measurement_task(
 
         let (co2eq, tvoc) = defmt::unwrap!(sgp30.measure_air_quality(&mut i2c2).await);
 
-        with_readouts(|readouts| {
+        {
+            let mut readouts = READOUTS.lock().await;
+
             readouts.hp206c = Some(Hp206cReadout {
                 pressure,
                 temperature,
@@ -196,48 +169,59 @@ async fn measurement_task(
                 voltage: o2_sample_mv,
                 concentration: o2_concentration,
             });
-            readouts.sgp30 = Some(Sgp30Readout {
-                co2eq,
-                tvoc,
-            })
-        });
+            readouts.sgp30 = Some(Sgp30Readout { co2eq, tvoc })
+        }
 
         if i % 1024 == 0 {
             let pressure_in_mbar = ((pressure + 99) / 100) as u16;
             defmt::info!("SCD30: recalibrating to {} mBar", pressure_in_mbar);
-            defmt::unwrap!(scd30.measure_continuously(&mut i2c2, pressure_in_mbar));
+            defmt::unwrap!(
+                scd30
+                    .measure_continuously(&mut i2c2, pressure_in_mbar)
+                    .await
+            );
         }
 
-        if defmt::unwrap!(retry_crc_errors(|| scd30.is_data_ready(&mut i2c2))) {
-            let (co2, scd30_temperature, humidity) = defmt::unwrap!(scd30.read_measurement(&mut i2c2));
+        if defmt::unwrap!(scd30.is_data_ready(&mut i2c2).await) {
+            let (co2, scd30_temperature, humidity) =
+                defmt::unwrap!(scd30.read_measurement(&mut i2c2).await);
 
-            with_readouts(|readouts| {
-                readouts.scd30 = Some(Scd30Readout {
-                    co2,
-                    temperature: scd30_temperature,
-                    humidity,
-                });
+            READOUTS.lock().await.scd30 = Some(Scd30Readout {
+                co2,
+                temperature: scd30_temperature,
+                humidity,
             });
 
             if i % 1024 == 0 {
-                let absolute_humidity = Sgp30::relative_humidity_to_absolute(humidity / 100.0, temperature as f32 / 100.0);
-                defmt::info!("SGP30: recalibrating to {} + {}/256 g/m^3", absolute_humidity / 256, absolute_humidity % 256);
-                defmt::unwrap!(sgp30.set_humidity(&mut i2c2, absolute_humidity));
+                let absolute_humidity = Sgp30::relative_humidity_to_absolute(
+                    humidity / 100.0,
+                    temperature as f32 / 100.0,
+                );
+                defmt::info!(
+                    "SGP30: recalibrating to {} + {}/256 g/m^3",
+                    absolute_humidity / 256,
+                    absolute_humidity % 256
+                );
+                defmt::unwrap!(sgp30.set_humidity(&mut i2c2, absolute_humidity).await);
             }
         }
     }
 }
 
-#[embassy::task]
-async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::Output<PushPull>>>) {
+#[embassy_executor::task]
+async fn display_task(
+    mut lcd: ST7789<FsmcLcd<'static>, Output<'static, PB13>, Output<'static, PE5>>,
+) {
     let mut ticker = Ticker::every(Duration::from_secs(1));
 
-    while let Some(()) = ticker.next().await {
+    loop {
+        ticker.next().await;
+
         if !DISPLAY_ENABLED.load(Ordering::SeqCst) {
             continue;
         }
 
-        let measurement = with_readouts(|readouts| *readouts);
+        let measurement = READOUTS.lock().await.clone();
         let mut str = ArrayString::<256>::new();
 
         if let Some(measurement) = measurement.scd30 {
@@ -288,7 +272,7 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
 
         text.draw(&mut lcd).unwrap();
 
-        if let Some((ssid, ip)) = with_network_info(|info| *info) {
+        if let Some((ssid, ip)) = NETWORK_INFO.lock().await.clone() {
             str.clear();
 
             writeln!(str, "SSID: {}", ssid).unwrap();
@@ -306,42 +290,16 @@ async fn display_task(mut lcd: ST7789<Lcd<SubBank3>, PB13<stm32f4xx_hal::gpio::O
     }
 }
 
-#[embassy::main]
-async fn main(spawner: Spawner, device: Peripherals) {
+embassy_stm32::bind_interrupts!(struct I2C2Irqs {
+    I2C2_EV => EventInterruptHandler<I2C2>;
+    I2C2_ER => ErrorInterruptHandler<I2C2>;
+});
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
     defmt::info!("System started");
 
-    // NOTE: it's probably unwise to have two PAC crates...
-    let hal = defmt::unwrap!(stm32f4xx_hal::pac::Peripherals::take());
-
-    // Enable system clocks in low power mode
-    hal.DBGMCU.cr.modify(|_, w| {
-        w.dbg_sleep().set_bit();
-        w.dbg_standby().set_bit();
-        w.dbg_stop().set_bit()
-    });
-
-    // Enable DMA1 and GPIO clocks
-    hal.RCC.ahb1enr.modify(|_, w| {
-        w.dma1en().enabled();
-        w.gpioaen().enabled();
-        w.gpioben().enabled();
-        w.gpiocen().enabled();
-        w.gpioden().enabled();
-        w.gpioeen().enabled();
-        w.gpiofen().enabled();
-        w.gpiogen().enabled();
-        w.gpiohen().enabled()
-    });
-
-    // IMPORTANT: `GpioExt::split` resets the GPIO port so it must be called before the pins get configured by embassy.
-    let gpiob = hal.GPIOB.split();
-    let gpiod = hal.GPIOD.split();
-    let gpioe = hal.GPIOE.split();
-    let gpiof = hal.GPIOF.split();
-    let gpiog = hal.GPIOG.split();
-
-    // Enable the system configuration controller clock
-    hal.RCC.apb2enr.modify(|_, w| w.syscfgen().enabled());
+    let device = embassy_stm32::init(Default::default());
 
     let button = ExtiInput::new(Input::new(device.PA0, Pull::Down), device.EXTI0);
     let lcd_backlight = Output::new(
@@ -354,53 +312,50 @@ async fn main(spawner: Spawner, device: Peripherals) {
         Speed::Low,
     );
 
-    let i2c2 = I2c::new(device.I2C2, device.PB10, device.PB11, 100u32.khz());
+    let i2c2 = I2c::new(
+        device.I2C2,
+        device.PB10,
+        device.PB11,
+        I2C2Irqs,
+        device.DMA1_CH7,
+        device.DMA1_CH2,
+        embassy_stm32::time::khz(100),
+        Default::default(),
+    );
 
     let mut adc1 = Adc::new(device.ADC1, &mut Delay);
     adc1.set_sample_time(SampleTime::Cycles480);
     adc1.set_resolution(Resolution::TwelveBit);
     let oxygen_sensor = device.PC0;
 
-    let (lcd_pins, lcd_reset) = {
-        let lcd_pins = LcdPins {
-            data: (
-                gpiod.pd14.into_alternate(),
-                gpiod.pd15.into_alternate(),
-                gpiod.pd0.into_alternate(),
-                gpiod.pd1.into_alternate(),
-                gpioe.pe7.into_alternate(),
-                gpioe.pe8.into_alternate(),
-                gpioe.pe9.into_alternate(),
-                gpioe.pe10.into_alternate(),
-                gpioe.pe11.into_alternate(),
-                gpioe.pe12.into_alternate(),
-                gpioe.pe13.into_alternate(),
-                gpioe.pe14.into_alternate(),
-                gpioe.pe15.into_alternate(),
-                gpiod.pd8.into_alternate(),
-                gpiod.pd9.into_alternate(),
-                gpiod.pd10.into_alternate(),
-            ),
-            address: gpiof.pf0.into_alternate(),
-            read_enable: gpiod.pd4.into_alternate(),
-            write_enable: gpiod.pd5.into_alternate(),
-            chip_select: ChipSelect3(gpiog.pg10.into_alternate()),
-        };
-        let lcd_reset = gpiob
-            .pb13
-            .into_push_pull_output()
-            .set_speed(stm32f4xx_hal::gpio::Speed::VeryHigh);
-        let mut _lcd_tearing = gpiob.pb14.into_floating_input();
+    let lcd = FsmcLcd::new(
+        device.FSMC,
+        device.PD14,
+        device.PD15,
+        device.PD0,
+        device.PD1,
+        device.PE7,
+        device.PE8,
+        device.PE9,
+        device.PE10,
+        device.PE11,
+        device.PE12,
+        device.PE13,
+        device.PE14,
+        device.PE15,
+        device.PD8,
+        device.PD9,
+        device.PD10,
+        device.PF0,
+        device.PD4,
+        device.PD5,
+        device.PG10,
+    );
 
-        (lcd_pins, lcd_reset)
-    };
+    let lcd_reset = Output::new(device.PB13, Level::High, Speed::VeryHigh);
+    let _lcd_tearing = Input::new(device.PB14, Pull::None);
 
-    let lcd_write_timing = Timing::default().data(3).address_setup(3).bus_turnaround(0);
-    let lcd_read_timing = Timing::default().data(8).address_setup(8).bus_turnaround(0);
-
-    let (_fsmc, interface) = FsmcLcd::new(hal.FSMC, lcd_pins, &lcd_read_timing, &lcd_write_timing);
-
-    let mut lcd = ST7789::new(interface, lcd_reset, 240, 240);
+    let mut lcd = ST7789::new(lcd, Some(lcd_reset), None, 240, 240);
     lcd.init(&mut Delay).unwrap();
     lcd.set_orientation(Orientation::PortraitSwapped).unwrap();
     // The framebuffer is 320 pixels tall and in upside down portrait mode the bottom of the buffer is visible instead of the top.
@@ -412,17 +367,16 @@ async fn main(spawner: Spawner, device: Peripherals) {
     let mut spi3_config = Config::default();
     spi3_config.mode = MODE_0;
     spi3_config.bit_order = BitOrder::MsbFirst;
+    // FIXME: supposedly supports up to 20 MHz but at over 16 MHz we get data errors
+    spi3_config.frequency = embassy_stm32::time::mhz(16);
     let wifi = Ism43362::new(
         Spi::new(
             device.SPI3,
             device.PB12,
             device.PB5,
             device.PB4,
-            // TODO: DMA. 16-bit transfers are not (yet?) supported.
-            NoDma,
-            NoDma,
-            // FIXME: supposedly supports up to 20 MHz but at over 16 MHz we get data errors
-            16.mhz(),
+            device.DMA1_CH5,
+            device.DMA1_CH0,
             spi3_config,
         ),
         device.PH1,
@@ -431,9 +385,8 @@ async fn main(spawner: Spawner, device: Peripherals) {
         device.PG11,
     );
 
-    let mut watchdog = IndependentWatchdog::new(hal.IWDG);
-    watchdog.stop_on_debug(&hal.DBGMCU, true);
-    watchdog.start(32.secs());
+    let mut watchdog = IndependentWatchdog::new(device.IWDG, 32_000_000);
+    watchdog.unleash();
 
     defmt::unwrap!(spawner.spawn(button_task(button, lcd_backlight)));
     defmt::unwrap!(spawner.spawn(measurement_task(i2c2, adc1, oxygen_sensor, watchdog)));

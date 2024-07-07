@@ -1,7 +1,6 @@
 use arrayvec::ArrayVec;
 use crc_any::CRCu8;
-use embassy_stm32::i2c::{Error as I2cError, I2c, Instance};
-use embedded_hal::blocking::i2c::{Read, Write};
+use embassy_stm32::i2c::{Error as I2cError, I2c, Instance, RxDma, TxDma};
 
 const ADDRESS: u8 = 0x61;
 
@@ -36,23 +35,26 @@ impl Scd30 {
         crc
     }
 
-    pub fn measure_continuously<I2C: Instance>(
+    pub async fn measure_continuously<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
         &mut self,
-        i2c: &mut I2c<I2C>,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
         pressure: u16,
     ) -> Result<(), Error> {
         let mut command = ArrayVec::<u8, 5>::new();
         command.extend(0x0010u16.to_be_bytes());
         command.extend(pressure.to_be_bytes());
         command.push(self.crc8(&pressure.to_be_bytes()));
-        i2c.write(ADDRESS, &command)?;
+        i2c.write(ADDRESS, &command).await?;
         Ok(())
     }
 
-    pub fn is_data_ready<I2C: Instance>(&mut self, i2c: &mut I2c<I2C>) -> Result<bool, Error> {
+    pub async fn is_data_ready<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
+        &mut self,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
+    ) -> Result<bool, Error> {
         let mut buffer = [0; 3];
-        i2c.write(ADDRESS, &0x0202u16.to_be_bytes())?;
-        i2c.read(ADDRESS, &mut buffer)?;
+        i2c.write(ADDRESS, &0x0202u16.to_be_bytes()).await?;
+        i2c.read(ADDRESS, &mut buffer).await?;
 
         if self.crc8(&buffer[..2]) != buffer[2] {
             return Err(Error::Crc8);
@@ -61,13 +63,13 @@ impl Scd30 {
         Ok(u16::from_be_bytes([buffer[0], buffer[1]]) == 1)
     }
 
-    pub fn read_measurement<I2C: Instance>(
+    pub async fn read_measurement<I2C: Instance, TXDMA: TxDma<I2C>, RXDMA: RxDma<I2C>>(
         &mut self,
-        i2c: &mut I2c<I2C>,
+        i2c: &mut I2c<'_, I2C, TXDMA, RXDMA>,
     ) -> Result<(f32, f32, f32), Error> {
         let mut buffer = [0; 18];
-        i2c.write(ADDRESS, &0x0300u16.to_be_bytes())?;
-        i2c.read(ADDRESS, &mut buffer)?;
+        i2c.write(ADDRESS, &0x0300u16.to_be_bytes()).await?;
+        i2c.read(ADDRESS, &mut buffer).await?;
 
         for chunk in buffer.chunks(3) {
             if self.crc8(&chunk[0..2]) != chunk[2] {
