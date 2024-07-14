@@ -362,17 +362,17 @@ async fn handle_connection(
                 if let Some(measurement) = readouts.scd30 {
                     writeln!(
                         adaptor,
-                        "air_co2_concentration_ppm{{sensor=SCD30}} {}",
+                        "air_co2_concentration_ppm{{sensor=\"SCD30\"}} {}",
                         measurement.co2
                     )?;
                     writeln!(
                         adaptor,
-                        "air_temperature_celsius{{sensor=SCD30}} {}",
+                        "air_temperature_celsius{{sensor=\"SCD30\"}} {}",
                         measurement.temperature
                     )?;
                     writeln!(
                         adaptor,
-                        "air_relative_humidity_percent{{sensor=SCD30}} {}",
+                        "air_relative_humidity_percent{{sensor=\"SCD30\"}} {}",
                         measurement.humidity
                     )?;
                 }
@@ -380,12 +380,12 @@ async fn handle_connection(
                 if let Some(measurement) = readouts.hp206c {
                     writeln!(
                         adaptor,
-                        "air_pressure_pascals{{sensor=HP206C}} {}",
+                        "air_pressure_pascals{{sensor=\"HP206C\"}} {}",
                         measurement.pressure
                     )?;
                     writeln!(
                         adaptor,
-                        "air_temperature_celsius{{sensor=HP206C}} {}",
+                        "air_temperature_celsius{{sensor=\"HP206C\"}} {}",
                         measurement.temperature as f32 / 100.0,
                     )?;
                 }
@@ -393,7 +393,7 @@ async fn handle_connection(
                 if let Some(measurement) = readouts.mix8410 {
                     writeln!(
                         adaptor,
-                        "air_o2_concentration_percent{{sensor=MIX8410}} {}",
+                        "air_o2_concentration_percent{{sensor=\"MIX8410\"}} {}",
                         measurement.concentration
                     )
                     .unwrap();
@@ -402,11 +402,16 @@ async fn handle_connection(
                 if let Some(measurement) = readouts.sgp30 {
                     writeln!(
                         adaptor,
-                        "air_tvoc_co2eq_ppm{{sensor=SGP30}} {}",
+                        "air_tvoc_co2eq_ppm{{sensor=\"SGP30\"}} {}",
                         measurement.co2eq
                     )
                     .unwrap();
-                    writeln!(adaptor, "air_tvoc_ppb{{sensor=SGP30}} {}", measurement.tvoc).unwrap();
+                    writeln!(
+                        adaptor,
+                        "air_tvoc_ppb{{sensor=\"SGP30\"}} {}",
+                        measurement.tvoc
+                    )
+                    .unwrap();
                 }
             }
 
